@@ -3,7 +3,8 @@
 #include <can_msgs/msg/frame.hpp>                               //in out can
 #include <gmps_msgs/msg/gmps_detect.hpp>                        //out 検知
 #include <gmps_msgs/msg/gmps_error.hpp>                         //out エラー
-#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>  //in speed
+//#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>  //in speed
+#include <autoware_auto_vehicle_msgs/msg/velocity_report.hpp> // in speed, autoware
 #include <std_msgs/msg/bool.hpp>                                //in soft reset
 
 #define CMD_START 0x01
@@ -39,7 +40,7 @@ class GMPSDriver : public rclcpp::Node
 {
 private://ros subscriber
     rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr sub_can_frame_;                       //From GMPS, can frame msg
-    rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr sub_twist_; //車両からの速度情報
+    rclcpp::Subscription<autoware_auto_vehicle_msgs::msg::VelocityReport>::SharedPtr sub_velocity_; //車両からの速度情報
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_soft_reset_;                       //上位からのソフトリセット要求
 
 private://ros publisher
@@ -83,9 +84,9 @@ private://arguments for publishError
     uint8_t out_error_code_;
 
 private:
-    void callbackVelocity(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr msg)
+    void callbackVelocity(const autoware_auto_vehicle_msgs::msg::VelocityReport::SharedPtr msg)
     {
-        uint16_t velocity_mps_100 = fabs(msg->twist.twist.linear.x) * 100; //LSB 0.01 [m/s]
+        uint16_t velocity_mps_100 = fabs(msg->longitudinal_velocity) * 100; //LSB 0.01 [m/s]
 
         out_can_id_ = CANID_GMPS_SPEED;
         out_dlc_ = 2;
@@ -502,7 +503,7 @@ public:
         /* Subscriber */
         sub_can_frame_ = this->create_subscription<can_msgs::msg::Frame>(
             "in_gmps_can_frame", rclcpp::QoS(10), std::bind(&GMPSDriver::callbackCanFrame, this, std::placeholders::_1));
-        sub_twist_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+        sub_velocity_ = this->create_subscription<autoware_auto_vehicle_msgs::msg::VelocityReport>(
             "in_velocity", rclcpp::QoS(1), std::bind(&GMPSDriver::callbackVelocity, this, std::placeholders::_1));
         sub_soft_reset_ = this->create_subscription<std_msgs::msg::Bool>(
             "in_soft_reset", rclcpp::QoS(1), std::bind(&GMPSDriver::callbackSoftReset, this, std::placeholders::_1));
