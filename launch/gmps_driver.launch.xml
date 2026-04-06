@@ -4,7 +4,7 @@
   <arg name="param_file" default="$(find-pkg-share gmps_driver)/config/gmsp_driver.param.yaml"/>
 
   <!-- topic name -->
-  <arg name="in_velocity_name" default="/vehicle/status/velocity_status"/>
+  <arg name="in_velocity_name" default="/velocity"/>
   <arg name="in_soft_reset_name" default="/gmps_soft_reset"/>
   <arg name="in_gmps_can_frame_name" default="/from_can_bus"/>
   <arg name="out_gmps_can_frame_name" default="/to_can_bus"/>

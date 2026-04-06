@@ -11,7 +11,6 @@ The **GMPS Driver** is a ROS2 Driver for [GMPS sensor](https://www.aichi-steel.c
   - [gmps_msgs](https://github.com/aichisteel-gmps/gmps_msgs)
   - [can_msgs](https://github.com/ros-industrial/ros_canopen/tree/dashing)
   - [ros2_socketcan](https://github.com/autowarefoundation/ros2_socketcan)
-  - [autoware_auto_vehicle_msgs](https://github.com/tier4/autoware_auto_msgs/)
   
 ## Launch
 ```bash
@@ -37,7 +36,7 @@ $ ros2 launch gmps_driver gmps_driver
 - in_gmps_can_frame (can_msgs/Frame)  
  CAN messages from CAN bus.
 
-- in_velocity (autoware_auto_vehicle_msgs/VelocityReport)  
+- in_velocity (geometry_msgs/TwistWithCovarianceStamped)  
   Vehicle speed.
 
 - in_soft_reset (std_msgs/Bool)  

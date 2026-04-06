@@ -4,8 +4,9 @@
 #include <gmps_msgs/msg/gmps_detect.hpp>                        //out 検知
 #include <gmps_msgs/msg/gmps_error.hpp>                         //out エラー
 //#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>  //in speed
-#include <autoware_auto_vehicle_msgs/msg/velocity_report.hpp> // in speed, autoware
+#include <autoware_vehicle_msgs/msg/velocity_report.hpp> // in speed, autoware
 #include <std_msgs/msg/bool.hpp>                                //in soft reset
+#include <diagnostic_updater/diagnostic_updater.hpp>        //diagnostic updater
 
 #define CMD_START 0x01
 #define CMD_STOP 0x02
@@ -40,7 +41,7 @@ class GMPSDriver : public rclcpp::Node
 {
 private://ros subscriber
     rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr sub_can_frame_;                       //From GMPS, can frame msg
-    rclcpp::Subscription<autoware_auto_vehicle_msgs::msg::VelocityReport>::SharedPtr sub_velocity_; //車両からの速度情報
+    rclcpp::Subscription<autoware_vehicle_msgs::msg::VelocityReport>::SharedPtr sub_velocity_; //車両からの速度情報
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_soft_reset_;                       //上位からのソフトリセット要求
 
 private://ros publisher
@@ -54,6 +55,9 @@ private://ros timer
     rclcpp::Time last_cmd_send_time_ = get_clock()->now();  //GMPS_INPUTを最後に送信した時間。コマンドを連打しないため
     rclcpp::Time last_received_time_ = get_clock()->now();  //GMPS_INFOを最後に受信した時間。watchdogのため
     double elapsed_time_;                                   //最後に受信してからの経過時間
+
+private://diagnostic updater
+    diagnostic_updater::Updater diagnostic_updater_;
 
 private://parameters
     const bool param_offset_search_mode_; //OFFSET_SEARCH実行モード
@@ -84,7 +88,7 @@ private://arguments for publishError
     uint8_t out_error_code_;
 
 private:
-    void callbackVelocity(const autoware_auto_vehicle_msgs::msg::VelocityReport::SharedPtr msg)
+    void callbackVelocity(const autoware_vehicle_msgs::msg::VelocityReport::SharedPtr msg)
     {
         uint16_t velocity_mps_100 = fabs(msg->longitudinal_velocity) * 100; //LSB 0.01 [m/s]
 
@@ -487,10 +491,24 @@ private:
         pub_gmps_error_->publish(error);
     }
 
+private:
+    //diagnostic updater
+    void updateDiagnostic(diagnostic_updater::DiagnosticStatusWrapper & stat)
+    {
+        unsigned char lvl = diagnostic_msgs::msg::DiagnosticStatus::OK;
 
+        if (state_ == SYSTEMFAIL)
+            lvl = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+        if(out_error_code_ != gmps_msgs::msg::GmpsError::OK)
+            lvl = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+        stat.add<uint8_t>("SYSTEMFAIL", state_);
+        stat.add<uint8_t>("error_code", out_error_code_);
+        stat.summary(lvl, (lvl == diagnostic_msgs::msg::DiagnosticStatus::OK) ? "OK" : "Error");
+    }
 public:
     GMPSDriver(const rclcpp::NodeOptions &node_option)
         : rclcpp::Node("gmps_driver", node_option)
+        , diagnostic_updater_(this, 0.2)//diagnosticを0.1秒間隔でpublish
         , param_offset_search_mode_(declare_parameter<bool>("offset_search_mode", false))
         , param_delay_dist_(declare_parameter<double>("delay_dist", 0.1))
         , param_watchdog_timeout_(declare_parameter<double>("watchdog_timeout", 0.5))
@@ -503,7 +521,7 @@ public:
         /* Subscriber */
         sub_can_frame_ = this->create_subscription<can_msgs::msg::Frame>(
             "in_gmps_can_frame", rclcpp::QoS(10), std::bind(&GMPSDriver::callbackCanFrame, this, std::placeholders::_1));
-        sub_velocity_ = this->create_subscription<autoware_auto_vehicle_msgs::msg::VelocityReport>(
+        sub_velocity_ = this->create_subscription<autoware_vehicle_msgs::msg::VelocityReport>(
             "in_velocity", rclcpp::QoS(1), std::bind(&GMPSDriver::callbackVelocity, this, std::placeholders::_1));
         sub_soft_reset_ = this->create_subscription<std_msgs::msg::Bool>(
             "in_soft_reset", rclcpp::QoS(1), std::bind(&GMPSDriver::callbackSoftReset, this, std::placeholders::_1));
@@ -516,6 +534,11 @@ public:
         /* Timer */
         state_timer_ = rclcpp::create_timer(this, get_clock(), rclcpp::Rate(20).period(), std::bind(&GMPSDriver::callbackTimer, this));
 
+        /* Diagnostic Updater */
+        diagnostic_updater_.setHardwareID("gmps_driver");
+        diagnostic_updater_.add("GMPS Driver Status", this, &GMPSDriver::updateDiagnostic);
+
+        /**/
         if (param_offset_search_mode_ == true)
         {
             RCLCPP_INFO(this->get_logger(), "begin offset_search sequence");
