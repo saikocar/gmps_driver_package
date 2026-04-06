@@ -11,6 +11,8 @@ The **GMPS Driver** is a ROS2 Driver for [GMPS sensor](https://www.aichi-steel.c
   - [gmps_msgs](https://github.com/aichisteel-gmps/gmps_msgs)
   - [can_msgs](https://github.com/ros-industrial/ros_canopen/tree/dashing)
   - [ros2_socketcan](https://github.com/autowarefoundation/ros2_socketcan)
+  - [autoware_vehicle_msgs](https://github.com/autowarefoundation/autoware_msgs)
+  - diagnostic_updater
   
 ## Launch
 ```bash
@@ -51,6 +53,9 @@ $ ros2 launch gmps_driver gmps_driver
 
 - out_gmps_error (gmps_msgs/GmpsError)  
   GMPS sensor error.
+
+- /diagnostics (diagnostic_msgs/DiagnosticArray)  
+  Diagnostic status of GMPS driver. Reports SYSTEMFAIL state and error code.
 
 ## Parameter description
 
