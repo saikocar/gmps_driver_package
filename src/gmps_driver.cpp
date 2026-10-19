@@ -8,6 +8,8 @@
 #include <std_msgs/msg/bool.hpp>                                //in soft reset
 #include <diagnostic_updater/diagnostic_updater.hpp>        //diagnostic updater
 #include <algorithm>                                        //std::max(detect_lag_sec の下限 0)
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>     //detect_lag_sec を型を固定せずに宣言する(yaml に整数の 0 と書かれても落ちない)
+#include <stdexcept>                                        //std::runtime_error(detect_lag_sec が数でないとき)
 #include "dw_version.hpp"                                   //版の名乗り(cmake/dw_version.cmake がビルドのたびに生成)
 
 #define CMD_START 0x01
@@ -66,6 +68,7 @@ private://parameters
     const double param_delay_dist_;       //検知遅れ距離 [m]
     const double param_watchdog_timeout_; //GMPS_INFOによるウォッチドッグのタイムアウト時間[s]
     const double param_detect_lag_sec_;   //検知の時刻の遅れ [s]。読み取り機が検知してから CAN の枠が PC に届くまでの時間。検知の stamp(CAN の受信時刻)からこの分だけ引く(0.0 で従来どおり。負は 0 として扱う)
+    static constexpr double DETECT_LAG_SEC_MAX_PLAUSIBLE = 0.05; //detect_lag_sec がこれより大きければ桁の間違いの疑い(起動ログに WARN。値は変えない)
 
 private://GMPS用変数
     bool f_receive_ack_;    //GMPS_ACKを受信したフラグ
@@ -516,6 +519,30 @@ private:
         stat.add("detect_lag_sec", param_detect_lag_sec_);
         stat.summary(lvl, (lvl == diagnostic_msgs::msg::DiagnosticStatus::OK) ? "OK" : "Error");
     }
+private:
+    //detect_lag_sec を宣言して double で返す。yaml に 0(小数点なし)と書かれても落ちないように、型を固定せずに宣言して整数も受ける
+    //(ROS 2 humble は double で宣言した設定に整数を渡すと例外で止まり、読み取り機のノードごと起動しない。「0 にすれば戻せる」と書いて止まるのを防ぐ。
+    // 2026-10-19 の確かめ役の指摘)。負は 0 として扱う(stamp を遅らせる向きには使わない)。
+    double declareDetectLagSec()
+    {
+        rcl_interfaces::msg::ParameterDescriptor desc;
+        desc.description = "detection time lag [s] subtracted from the CAN receive stamp of each detection (0.0 = raw stamp)";
+        desc.dynamic_typing = true;
+        const rclcpp::ParameterValue v = declare_parameter("detect_lag_sec", rclcpp::ParameterValue(0.0046), desc);
+        return std::max(0.0, toDouble(v, "detect_lag_sec"));
+    }
+    //起動ログの確かめ用: 設定に書かれたままの値(負も)を double で返す
+    double detectLagSecRaw() const
+    {
+        return toDouble(get_parameter("detect_lag_sec").get_parameter_value(), "detect_lag_sec");
+    }
+    static double toDouble(const rclcpp::ParameterValue &v, const char *name)
+    {
+        if (v.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) return static_cast<double>(v.get<int64_t>());
+        if (v.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) return v.get<double>();
+        throw std::runtime_error(std::string("parameter ") + name + " must be a number (e.g. 0.0046 or 0.0), got type " + rclcpp::to_string(v.get_type()));
+    }
+
 public:
     GMPSDriver(const rclcpp::NodeOptions &node_option)
         : rclcpp::Node("gmps_driver", node_option)
@@ -523,16 +550,24 @@ public:
         , param_offset_search_mode_(declare_parameter<bool>("offset_search_mode", false))
         , param_delay_dist_(declare_parameter<double>("delay_dist", 0.1))
         , param_watchdog_timeout_(declare_parameter<double>("watchdog_timeout", 0.5))
-        , param_detect_lag_sec_(std::max(0.0, declare_parameter<double>("detect_lag_sec", 0.0046))) //負は 0 に(stamp を遅らせる向きには使わない)
+        , param_detect_lag_sec_(declareDetectLagSec()) //負は 0 に(stamp を遅らせる向きには使わない)。整数で書かれても受ける(declareDetectLagSec)
         , f_receive_ack_(false)
         , f_receive_info_(false)
         , detect_counter_(0)
     {
         RCLCPP_INFO(this->get_logger(), "constructor called");
         RCLCPP_INFO(this->get_logger(), "version %s", DW_VERSION);
-        if (get_parameter("detect_lag_sec").as_double() < 0.0)
+        const double lag_raw = detectLagSecRaw();
+        if (lag_raw < 0.0)
         {
-            RCLCPP_WARN(this->get_logger(), "detect_lag_sec %.4f is negative; treated as 0 (detect stamp is not shifted)", get_parameter("detect_lag_sec").as_double());
+            RCLCPP_WARN(this->get_logger(), "detect_lag_sec %.4f is negative; treated as 0 (detect stamp is not shifted)", lag_raw);
+        }
+        if (param_detect_lag_sec_ > DETECT_LAG_SEC_MAX_PLAUSIBLE)
+        {
+            //桁の間違い(0.46 など)なら、検知の時刻の自己位置が車速 × lag だけ後ろにずれ、gmps_localizer が全部の検知を 1.0 m より遠いとして捨てる
+            RCLCPP_WARN(this->get_logger(),
+                "detect_lag_sec %.4f is larger than %.2f s; probably a wrong digit (the detect stamp is shifted by %.2f m at 40 km/h and gmps_localizer may drop every detection). Check config/gmsp_driver.param.yaml",
+                param_detect_lag_sec_, DETECT_LAG_SEC_MAX_PLAUSIBLE, param_detect_lag_sec_ * 40.0 / 3.6);
         }
         RCLCPP_INFO(this->get_logger(), "detect_lag_sec %.4f (検知の stamp をこの分だけ前へずらす。0 で従来どおり)", param_detect_lag_sec_);
 
@@ -579,7 +614,7 @@ int main(int argc, char** argv)
     try{//メンバ初期化リスト(コンストラクタ宣言と中括弧の間の記述)で例外がthrowされた場合のtry-catch
         node = std::make_shared<GMPSDriver>(option);
     } catch(std::runtime_error &e) {//ros2の例外型の継承元クラスはstd::runtime_error
-		RCLCPP_ERROR_STREAM(rclcpp::get_logger("gmps_localizer"), e.what());
+		RCLCPP_ERROR_STREAM(rclcpp::get_logger("gmps_driver"), e.what());
 		return -1;
 	}
 
