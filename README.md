@@ -61,4 +61,5 @@ The parameters are set in `launch/gmps_driver.launch.xml` .
 | offset_search_mode | bool | Launch this node for sensor calibration. |
 | delay_dist | double | Delay distance from the center of a magnetic marker [m] |
 | watchdog_timeout| double | Threshold for watchdog timer [s] |
+| detect_lag_sec | double | Detection time lag [s], subtracted from the CAN receive stamp of each detection (default 0.0046, measured 2026-10-18 on the Erga Mio; 0.0 keeps the raw stamp, negative is treated as 0) |
 

@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+include(cmake/dw_version.cmake) # 版の名乗り(dw-notes「版を名乗る」2026-08-22。ビルドのたびに git の <枝>@<hash>[+dirty] を埋め込む)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -26,6 +27,7 @@ ament_target_dependencies(gmps_driver
  can_msgs
  diagnostic_updater
 )
+dw_version_attach(gmps_driver)
 
 install(TARGETS
   gmps_driver

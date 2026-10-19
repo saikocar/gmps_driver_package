@@ -7,6 +7,8 @@
 #include <autoware_auto_vehicle_msgs/msg/velocity_report.hpp> // in speed, autoware
 #include <std_msgs/msg/bool.hpp>                                //in soft reset
 #include <diagnostic_updater/diagnostic_updater.hpp>        //diagnostic updater
+#include <algorithm>                                        //std::max(detect_lag_sec の下限 0)
+#include "dw_version.hpp"                                   //版の名乗り(cmake/dw_version.cmake がビルドのたびに生成)
 
 #define CMD_START 0x01
 #define CMD_STOP 0x02
@@ -63,6 +65,7 @@ private://parameters
     const bool param_offset_search_mode_; //OFFSET_SEARCH実行モード
     const double param_delay_dist_;       //検知遅れ距離 [m]
     const double param_watchdog_timeout_; //GMPS_INFOによるウォッチドッグのタイムアウト時間[s]
+    const double param_detect_lag_sec_;   //検知の時刻の遅れ [s]。読み取り機が検知してから CAN の枠が PC に届くまでの時間。検知の stamp(CAN の受信時刻)からこの分だけ引く(0.0 で従来どおり。負は 0 として扱う)
 
 private://GMPS用変数
     bool f_receive_ack_;    //GMPS_ACKを受信したフラグ
@@ -148,7 +151,13 @@ private:
             out_mm_kind_ = 0;
             out_delay_dist_ = data[7] * 0.01;
 //            out_delay_dist_ = param_delay_dist_; //paramから定義する場合
-            detect_stamp_ = stamp;
+            //検知の時刻 = CAN の受信時刻(kvaser_reader_node が now() を入れる)− 検知の遅れ(detect_lag_sec)。
+            //読み取り機の中・CAN・USB の遅れは補償されておらず、記録では約 4.6 ms(磁気マーカーから出した位置が衛星測位より車速 1 m/s あたり約 4.6 mm 後ろにずれる)。
+            //根拠: dw-notes accident_20260906/analysis/gmps_section_20261017/speed_dependence_20261017/README.md(26 回の通過・22,673 検知の回帰)、
+            //      同 drive_check_20261018/README.md(10/18 の走行、tf_x 1.1 で cpt7 との前後の差 −0.038 m)。本人 2026-10-19「進めましょう」。
+            //stamp が遅れの分より小さい(0 のまま来た)ときは引かない(負の時刻にしない)。
+            const rclcpp::Duration lag = rclcpp::Duration::from_seconds(param_detect_lag_sec_);
+            detect_stamp_ = (stamp.nanoseconds() > lag.nanoseconds()) ? (stamp - lag) : stamp;
             publishDetect();
             break;
         }
@@ -503,6 +512,8 @@ private:
             lvl = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
         stat.add<uint8_t>("SYSTEMFAIL", state_);
         stat.add<uint8_t>("error_code", out_error_code_);
+        stat.add("version", DW_VERSION);
+        stat.add("detect_lag_sec", param_detect_lag_sec_);
         stat.summary(lvl, (lvl == diagnostic_msgs::msg::DiagnosticStatus::OK) ? "OK" : "Error");
     }
 public:
@@ -512,11 +523,18 @@ public:
         , param_offset_search_mode_(declare_parameter<bool>("offset_search_mode", false))
         , param_delay_dist_(declare_parameter<double>("delay_dist", 0.1))
         , param_watchdog_timeout_(declare_parameter<double>("watchdog_timeout", 0.5))
+        , param_detect_lag_sec_(std::max(0.0, declare_parameter<double>("detect_lag_sec", 0.0046))) //負は 0 に(stamp を遅らせる向きには使わない)
         , f_receive_ack_(false)
         , f_receive_info_(false)
         , detect_counter_(0)
     {
         RCLCPP_INFO(this->get_logger(), "constructor called");
+        RCLCPP_INFO(this->get_logger(), "version %s", DW_VERSION);
+        if (get_parameter("detect_lag_sec").as_double() < 0.0)
+        {
+            RCLCPP_WARN(this->get_logger(), "detect_lag_sec %.4f is negative; treated as 0 (detect stamp is not shifted)", get_parameter("detect_lag_sec").as_double());
+        }
+        RCLCPP_INFO(this->get_logger(), "detect_lag_sec %.4f (検知の stamp をこの分だけ前へずらす。0 で従来どおり)", param_detect_lag_sec_);
 
         /* Subscriber */
         sub_can_frame_ = this->create_subscription<can_msgs::msg::Frame>(

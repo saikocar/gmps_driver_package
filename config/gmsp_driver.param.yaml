@@ -3,3 +3,12 @@
     offset_search_mode: false
     delay_dist: 0.1
     watchdog_timeout: 0.5 #10000.0
+    # 検知の時刻の遅れ [s]。読み取り機がマーカーを検知してから、CAN の枠が PC(kvaser_reader_node)に届いて stamp が付くまでの時間。
+    # 検知の stamp からこの分だけ引く(stamp を前へずらす)。gmps_localizer の TF の引き(検知の時刻の自己位置)、出す位置の stamp、
+    # ekf_aichi の obs_time_comp(stamp からタイマーの時刻まで進める)、gmps_position_validator の時刻合わせの全部に効く。
+    # 根拠(dw-notes accident_20260906/analysis/gmps_section_20261017/speed_dependence_20261017/README.md、同 drive_check_20261018/README.md):
+    #   26 回の通過・22,673 検知で、磁気マーカーから出した位置は衛星測位より車速 1 m/s あたり 4.3〜4.8 mm 後ろ(cpt7 −4.84、isa100 −4.35、平均 −4.64 mm/(m/s))
+    #   = 補われていない遅れ 約 4.6 ms。10/18 午後の走行(tf_x 1.1、約 38 km/h)では cpt7 より前後 −0.038 m。この値で約 +0.01 m になる見込み。
+    #   読み取り機が返す検知の遅れの距離(常に 0.14 m)とは別のもの。0.0 にすれば従来どおり(ビルド不要、次の起動から)。負は 0 として扱う。
+    #   本人 2026-10-19「進めましょう」で入れた。
+    detect_lag_sec: 0.0046
