@@ -62,10 +62,11 @@ def rclpy_ctx():
     prefix = subprocess.run(['bash', '-c', f'{shell_prefix()} ros2 pkg prefix gmps_driver'],
                             env=ros_env(), capture_output=True, text=True).stdout.strip()
     print(f'\n[test_detect_lag] gmps_driver の install: {prefix or "?"}(GMPS_TEST_INSTALL={INSTALL or "なし"}、domain {DOMAIN})')
-    n = subprocess.run(['bash', '-c', f'{shell_prefix()} ros2 node list --no-daemon --spin-time 2 | wc -l'],
-                       env=ros_env(), capture_output=True, text=True).stdout.strip()
-    if n != '0':
-        pytest.fail(f'ROS_DOMAIN_ID={DOMAIN} に先住のノードが {n} ある。GMPS_TEST_DOMAIN で空いている番号を指定すること')
+    nodes = subprocess.run(['bash', '-c', f'{shell_prefix()} ros2 node list --no-daemon --spin-time 2'],
+                           env=ros_env(), capture_output=True, text=True).stdout.split()
+    if nodes:
+        pytest.fail(f'ROS_DOMAIN_ID={DOMAIN} に先住のノードが {len(nodes)} ある: {nodes}(ROS_LOCALHOST_ONLY を外して走るので LAN の別の機のノードも見える)。'
+                    'GMPS_TEST_DOMAIN で空いている番号を指定すること')
     import rclpy
     rclpy.init(domain_id=DOMAIN)
     yield rclpy
@@ -81,11 +82,12 @@ def run_driver(rclpy, tmpdir, extra_args, stamps):
     cmd = (f'{shell_prefix()} exec ros2 run gmps_driver gmps_driver --ros-args -p watchdog_timeout:=10000.0{extra_args}'
            ' -r in_gmps_can_frame:=/t/can_rx -r out_gmps_can_frame:=/t/can_tx -r out_gmps_detect:=/t/gmps_detect'
            ' -r in_velocity:=/t/vel -r in_soft_reset:=/t/reset -r out_gmps_error:=/t/err')
-    proc = subprocess.Popen(['bash', '-c', cmd], env=ros_env(), stdout=open(logfile, 'w'), stderr=subprocess.STDOUT, start_new_session=True)
+    # 試験側のノード・購読・発行はノードを起動する前に作る(型の読み込みに失敗したとき(install を source していない等)に、起動したノードを残さないため)
     nd = Node('gmps_driver_test')
     got = []
     nd.create_subscription(GmpsDetect, '/t/gmps_detect', got.append, 10)
     pub = nd.create_publisher(Frame, '/t/can_rx', 10)
+    proc = subprocess.Popen(['bash', '-c', cmd], env=ros_env(), stdout=open(logfile, 'w'), stderr=subprocess.STDOUT, start_new_session=True)
     try:
         t_end = time.time() + 2.5
         while time.time() < t_end:
@@ -104,12 +106,26 @@ def run_driver(rclpy, tmpdir, extra_args, stamps):
         check_version(log)
         return got, log
     finally:
-        os.killpg(proc.pid, 2)
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, 9)
+        kill_group(proc)
         nd.destroy_node()
+
+
+def kill_group(proc):
+    """起動したノード(bash → ros2 run → 本体。同じプロセスグループ)を止める。SIGINT で待ち、残れば SIGKILL。親が先に終わっても子が残らないようにグループごと掃く"""
+    import signal
+    for sig, wait in ((signal.SIGINT, 3.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=wait)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    subprocess.run(['pkill', '-KILL', '-g', str(proc.pid)], stderr=subprocess.DEVNULL)
+    left = subprocess.run(['pgrep', '-g', str(proc.pid)], capture_output=True, text=True).stdout.split()
+    assert not left, f'起動したノードのプロセスが残っている: {left}'
 
 
 def check_version(log):
